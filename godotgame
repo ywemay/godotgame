@@ -1,0 +1,264 @@
+#!/usr/bin/env php7.2
+<?php
+
+// getopt() see: https://www.php.net/manual/en/function.getopt.php
+
+define('DIR_TPL', __DIR__ . '/Templates');
+// define('DIR_SITE', '/Home/dorian/Projects/Teaching/Reveal');
+define('REBUILD', in_array('-f', $argv));
+define('VERBOSE', in_array('-v', $argv));
+
+$opt  = getopt('l::u::g::p::s::h::') + [
+  'l' => 'L*',  // Lessons subpath
+  'u' => 'U*',  // Unit subpath
+  'g' => false,   // Game name - limit generation of games for a single game name
+  'p' => 'HTML5',   // platform HTML5, Android, Window
+  's' => false, //separate the project in its own directory
+  'h' => false, //show help
+];
+
+if ($opt['h']) {
+  print "Run this script in the directory that contains img, audo and godot subdirectories with games instructions and resources.\n";
+  print "-l  lesson subpath, defaults to L*\n";
+  print "-u  unit subpath, defaults to U*\n";
+  print "-u  game key - limit build to specific game name\n";
+  print "-p  platform - build for specific platform name\n";
+  print "-s  separate projects - write project sources into 'projects' subfolder.\n";
+  print "-h  show help.\n";
+  die();
+}
+
+print_r($opt);
+
+$dname = getcwd();
+define('CWD', $dname);
+
+$dGodotYaml = $dname . '/godot';
+$dProjects = $dname . '/Projects';
+
+if (!is_dir($dGodotYaml)) {
+  die('Directory ' . $dGodotYaml . ' is missing');
+}
+
+// $configFiles = glob($dGodotYaml . '/U*/L*.yaml');
+$configFiles = glob($dGodotYaml . '/' . $opt['u'] . '/' . $opt['l'] . '.yaml');
+
+foreach ($configFiles as $cfName) {
+  print "Config file: $cfName...\n";
+  $c = file_get_contents($cfName);
+  preg_match("/(.*?)\/(\w+)\/godot\/((U\d+)\/(L\d+))\.yaml/", $cfName, $mt);
+  list(, $dirSlides, $course, $lessonSubPath, $uniK, $lessonK) = $mt;
+  $dirCourse = $dirSlides . '/' . $course;
+  $dirGames = $dirCourse . '/games/' . $lessonSubPath;
+  $yaml = yaml_parse($c);
+
+  // make sure Projects subdir is present if -s option is provided.
+  if ($opt['s']) {
+    if (!is_dir($dProjects)) mkdir($dProjects);
+  }
+
+  foreach($yaml['games'] as $gameK => $gamedata) {
+    if ($gamedata == '~') {
+      $gamedata = [
+        'key' => $gameK,
+        'vocab' => isset($yaml['vocab']) ? $yaml['vocab'] : [],
+      ];
+    }
+    $gK = isset($gamedata['key']) ? $gamedata['key'] : $gameK;
+    if ($opt['g'] && $opt['g'] != $gK) continue;
+
+    // check if game template is available:
+    $gTpl = DIR_TPL . '/' . $gK;
+    print "Game $gK, $lessonSubPath...\n";
+    if (!is_dir($gTpl)) {
+      print "ERROR: Cannot find game template named $gTpl in $cfName\n";
+      continue;
+    }
+
+    $dirHTML5Game = $dirGames . '/' . $gK;
+    if (!is_dir($dirHTML5Game)) {
+      mkdir($dirHTML5Game, 0777, true);
+    }
+    if (!is_dir($dirHTML5Game)) {
+      print "ERROR: Failed to create directory $dirHTML5Game ...\n";
+      continue;
+    }
+    $rebuild = isset($yaml['rebuild']) && $yaml['rebuild'];
+
+    $outFileName = 'unknown';
+    if ($opt['p'] == 'HTML5') {
+      $outFileName = 'index.html';
+    }
+    elseif ($opt['p'] == 'android') {
+      $outFileName = $course . $uniK . $lessonK . '_' . $gK . '.apk';
+    }
+    $indexFile = $dirHTML5Game . '/' . $outFileName;
+    if (file_exists($indexFile) && (!REBUILD || $rebuild)) {
+      print "File $indexFile already exists... use -f to force rebiulding, or append 'rebuild: true' in yaml $cfName file ...\n";
+      continue;
+    }
+
+    if (isset($yaml['vocab']) && (!isset($gamedata['vocab'])|| !$gamedata['vocab'] || $gamedata['vocab'] == '~')) {
+      $gamedata['vocab'] = $yaml['vocab'];
+    }
+    $audioFiles = getAudioFiles($dirCourse, $lessonSubPath, $gamedata['vocab']);
+    if (!$audioFiles) {
+      print "ERROR: Cannot find audio files for $lessonSubPath, $gameK\n";
+      continue;
+    }
+    $imageFiles = getImageFiles($dirCourse, $lessonSubPath, $gamedata['vocab']);
+    if (!$imageFiles) {
+      print "ERROR: Cannot find image files for $lessonSubPath, $gameK\n";
+      continue;
+    }
+    $missingImgs = array_diff(array_keys($imageFiles), $gamedata['vocab']);
+    $missingAudios = array_diff(array_keys($audioFiles), $gamedata['vocab']);
+    if ($missingImgs) {
+      print "Missing images for " . implode(', ', $missingImgs) . "\n";
+      continue;
+    }
+    if ($missingAudios) {
+      print "Missing audios for " . implode(', ', $missingAudios) . "\n";
+      continue;
+    }
+    if (file_exists($gTpl . '/Art.gd')) {
+      $artFile = 'Art.gd';
+    }
+    elseif (file_exists($gTpl . '/assets/Art.gd')) {
+      $artFile = 'assets/Art.gd';
+    }
+    else {
+      print "Cannot find Art.gd location...\n";
+      continue;
+    }
+
+    // Make sure we have a copy of original art file to be able to restore it letter.
+    $artFileFull = $gTpl . '/' . $artFile;
+    $artFileCopy = $artFileFull . '.back';
+    if (!file_exists($artFileCopy)) {
+      copy($artFileFull, $artFileCopy);
+    }
+
+    // Building the images/sounds preload script (Art.gd)
+    $vocab = $gamedata['vocab'];
+    $preload = [
+      'img' => [],
+      'audio' => [],
+    ];
+    foreach($vocab as $w) {
+      $preload['img'][] = "\t" . 'preload("res://assets/img/art/' . $w . '.png"),';
+      $preload['audio'][] = "\t" . 'preload("res://assets/audio/art/' . $w . '.wav"),';
+    }
+    $ip = 'res://assets/img/art/';
+    $artContent = implode("\n", [
+      "extends Node\n",
+      'var textures = [',
+      implode("\n", $preload['img']),
+      "\t" . ']',
+      "\n",
+      'var audios = [',
+      implode("\n", $preload['audio']),
+      "\t" . ']',
+      "\n",
+    ]);
+
+    file_put_contents($artFileFull, $artContent);
+
+    $cmds = [
+      'rm ' . $gTpl . '/assets/img/art/*',
+      'rm ' . $gTpl . '/assets/audio/art/*',
+    ];
+
+    $dImg = $gTpl . '/assets/img/art';
+    $dAudio = $gTpl . '/assets/audio/art';
+
+    foreach($imageFiles as $imgF) {
+      $bn = basename($imgF);
+      if (preg_match("/^(.*?)\.svg$/", $bn, $mt)) {
+        $cmds[] = 'inkscape --export-png=\"' . $dImg . '/' . $mt[1] . '.png" --export-width=200 --export-height=200 "' . $imgF . '"' ;
+      }
+      else {
+        $cmds[] = 'convert -resize 200x200 "'. $imgF . '" "' . $dImg . '/' . $bn . '"';
+      }
+    }
+    foreach($audioFiles as $auF) {
+      $bn = basename($auF);
+      if (!preg_match("/^(.*?)\.wav$/", $bn, $mt)) {
+        $cmds[] = 'ffmpeg -i "' . $auF . '" "' . $dAudio . '/' . $mt[1] . '.wav"';
+      }
+      else {
+        $cmds[] = 'cp "' . $auF . '" "' .$dAudio . '/' . $bn . '"';
+      }
+    }
+    $cmds[] = 'cd "' . $gTpl . '"';
+    if (!$opt['s']) {
+      $cmds[] = 'godot --export ' . $opt['p'] . ' "' . $indexFile . '" .';
+    }
+    else {
+      $cmds[] = "mkdir -p $dProjects/$lessonSubPath/$gK";
+      $cmds[] = "cp -r ./* $dProjects/$lessonSubPath/$gK";
+    }
+
+    // --- Clean up:
+    $cmds[] = 'rm "' . $artFileFull . '"';
+    $cmds[] = 'cp "' . $artFileFull . '.back" "' . $artFileFull . '"';
+    $cmds[] = 'cd "' . CWD . '"';
+    $shPath = $dGodotYaml . '/' . $lessonSubPath . '.sh';
+
+    $projectCfg = $gTpl . '/project.godot';
+    $projectCfgO = $projectCfg . '.original';
+
+    if (file_exists($projectCfgO)) {
+      unlink($projectCfgO);
+    }
+    copy($projectCfg, $projectCfgO);
+
+    $c = file_get_contents($projectCfgO);
+    if ($c) {
+      $c = preg_replace("/config\/name=\".*?\"/", 'config/name="' . $gK . ': ' . $course . '-' . $uniK . '-' . $lessonK . '"', $c);
+      file_put_contents($projectCfg, $c);
+    }
+    $cmds[] = 'rm "' . $projectCfg . '"';
+    $cmds[] = 'cp "' . $projectCfgO . '" "' . $projectCfg . '"';
+    file_put_contents($shPath, implode("\n", $cmds));
+    shell_exec("bash $shPath");
+  }
+}
+
+function getImageFiles($path, $lPath, $vocab) {
+  $imgPath = $path . '/img/' . $lPath;
+  $rez = [];
+  foreach ($vocab as $w) {
+    $fn = $imgPath . '/' . $w;
+    if (file_exists($fn . '.png')) {
+      $rez[$w] = $fn . '.png';
+      continue;
+    }
+    elseif (file_exists($fn . '.svg')) {
+      $rez[$w] = $fn . '.svg';
+      continue;
+    }
+  }
+  return $rez;
+}
+
+function getAudioFiles($path, $lPath, $vocab) {
+  $audioPath = $path . '/audio/' . $lPath;
+  $rez = [];
+  foreach($vocab as $w) {
+    $fn = $audioPath . '/' . $w;
+    if (file_exists($fn . '.wav')) {
+      $rez[$w] = $fn . '.wav';
+      continue;
+    }
+    elseif (file_exists($fn . '.ogg')) {
+      $rez[$w] = $fn . '.ogg';
+      continue;
+    }
+    elseif (file_exists($fn . '.mp3')) {
+      $rez[$w] = $fn . '.mp3';
+      continue;
+    }
+  }
+  return $rez;
+}

@@ -1,0 +1,16 @@
+[gd_scene load_steps=3 format=2]
+
+[ext_resource path="res://assets/img/fixed/spider_parts.png" type="Texture" id=1]
+
+[sub_resource type="CircleShape2D" id=1]
+radius = 50.0
+
+[node name="Spider" type="RigidBody2D"]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource( 1 )
+
+[node name="Body" type="Polygon2D" parent="."]
+texture = ExtResource( 1 )
+polygon = PoolVector2Array( 90.9091, 471.212, 225.758, 409.091, 451.515, 413.636, 571.212, 524.242, 572.727, 657.576, 437.879, 740.909, 296.97, 760.606, 139.394, 722.727, 50, 613.636 )
+uv = PoolVector2Array( 101.515, 475.758, 225.758, 409.091, 451.515, 413.636, 571.212, 524.242, 572.727, 657.576, 437.879, 740.909, 296.97, 760.606, 139.394, 722.727, 43.9394, 631.818 )

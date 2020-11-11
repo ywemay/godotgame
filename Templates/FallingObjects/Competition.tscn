@@ -1,0 +1,15 @@
+[gd_scene load_steps=2 format=2]
+
+[ext_resource path="res://FallingObjects.tscn" type="PackedScene" id=1]
+
+[node name="Competition" type="Node2D"]
+
+[node name="FallingObjects1" parent="." instance=ExtResource( 1 )]
+scale = Vector2( 0.48, 1 )
+
+[node name="FallingObjects2" parent="." instance=ExtResource( 1 )]
+position = Vector2( 524, 0 )
+scale = Vector2( 0.48, 1 )
+
+[node name="Viewport" type="Viewport" parent="."]
+size = Vector2( 512, 550 )
